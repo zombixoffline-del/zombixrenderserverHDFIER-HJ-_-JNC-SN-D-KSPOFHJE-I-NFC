@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
 import time
@@ -11,7 +8,7 @@ app = Flask(__name__)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="eventlet",
+    async_mode="threading",
     ping_timeout=60,
     ping_interval=25,
     max_http_buffer_size=10 * 1024 * 1024,
@@ -19,20 +16,14 @@ socketio = SocketIO(
 
 players = {}
 players_lock = threading.Lock()
-
-# Игрок считается отключённым, если не присылал state > STALE_TIMEOUT секунд
 STALE_TIMEOUT = 60
 
-
 def public_player(p: dict) -> dict:
-    """Убираем служебные поля перед отправкой клиентам."""
     return {k: v for k, v in p.items() if k != "last_seen"}
 
-
 def cleanup_loop():
-    """Фоновый поток: выкидывает игроков, которые давно не слали state."""
     while True:
-        eventlet.sleep(15)
+        time.sleep(15)
         now = time.time()
         stale = []
         with players_lock:
@@ -46,11 +37,9 @@ def cleanup_loop():
         if stale:
             print(f"[cleanup] removed {len(stale)} stale players | total: {len(players)}")
 
-
 @socketio.on("connect")
 def on_connect():
     print(f"[+] connect: {request.sid} | total: {len(players)}")
-
 
 @socketio.on("register")
 def handle_register(data):
@@ -66,12 +55,9 @@ def handle_register(data):
         new_data = public_player(players[request.sid])
         others = {sid: public_player(p) for sid, p in players.items() if sid != request.sid}
 
-    # Новому игроку — список уже подключённых
     emit("all_players", others)
-    # Остальным — сообщаем о новом игроке
     emit("player_update", {"sid": request.sid, **new_data}, broadcast=True, include_self=False)
     print(f"[reg] {name} | total: {len(players)}")
-
 
 @socketio.on("state")
 def handle_state(data):
@@ -93,7 +79,6 @@ def handle_state(data):
 
     emit("player_update", out, broadcast=True, include_self=False)
 
-
 @socketio.on("chat")
 def handle_chat(data):
     with players_lock:
@@ -113,7 +98,6 @@ def handle_chat(data):
     }
     emit("chat", payload, broadcast=True)
 
-
 @socketio.on("disconnect")
 def on_disconnect():
     with players_lock:
@@ -122,13 +106,11 @@ def on_disconnect():
     emit("player_left", {"sid": request.sid}, broadcast=True)
     print(f"[-] disconnect: {request.sid} | total: {total}")
 
-
 @socketio.on("ping_alive")
 def handle_ping():
     with players_lock:
         if request.sid in players:
             players[request.sid]["last_seen"] = time.time()
-
 
 @app.route("/")
 def index():
@@ -138,15 +120,11 @@ def index():
         "players_online": len(players),
     })
 
-
 @app.route("/health")
 def health():
     return jsonify({"ok": True, "players": len(players)})
 
-
-# Запускаем фоновую уборку «мёртвых» игроков
 threading.Thread(target=cleanup_loop, daemon=True).start()
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
